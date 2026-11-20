@@ -185,6 +185,7 @@ class FileHub(Tk):
         self.search_subfolders = BooleanVar(value=False)
         self.show_details = BooleanVar(value=True)
         self.search_query = StringVar()
+        self.extension_filter = StringVar(value="Tất cả")
         self.address = StringVar()
         self.status = StringVar(value="Sẵn sàng")
         self.summary = StringVar(value="")
@@ -211,6 +212,7 @@ class FileHub(Tk):
         self.sort_reverse = False
         self.sidebar_targets: dict[str, str] = {}
         self.search_query.trace_add("write", self._schedule_search)
+        self.extension_filter.trace_add("write", self._schedule_search)
         self._build_ui()
         self.navigate(self.current_path)
         self.after(120, self._handle_events)
@@ -334,6 +336,9 @@ class FileHub(Tk):
         search_options.pack(fill="x", padx=14, pady=(0, 7))
         ttk.Checkbutton(search_options, text="Tìm cả thư mục con", variable=self.search_subfolders,
                         command=self.refresh, style="App.TCheckbutton").pack(side="left", padx=(0, 15))
+        Label(search_options, text="Loại file:", bg=p["panel"], fg=p["muted"]).pack(side="left", padx=(0, 5))
+        ttk.Combobox(search_options, textvariable=self.extension_filter, state="readonly", width=12,
+                     values=("Tất cả", "PDF", "Excel", "Word", "Ảnh", "HTML", "Python", "ZIP")).pack(side="left", padx=(0, 15))
         ttk.Checkbutton(search_options, text="Hiển thị tệp ẩn", variable=self.show_hidden,
                         command=self._toggle_hidden, style="App.TCheckbutton").pack(side="left")
 
@@ -531,12 +536,13 @@ class FileHub(Tk):
         query = self.search_query.get().strip().casefold()
         recursive = bool(query and self.search_subfolders.get())
         show_hidden = self.show_hidden.get()
+        file_filter = self.extension_filter.get()
         stop = self.scan_stop
         threading.Thread(target=self._scan_worker,
-                         args=(generation, folder, query, recursive, show_hidden, stop), daemon=True).start()
+                         args=(generation, folder, query, recursive, show_hidden, stop, file_filter), daemon=True).start()
 
     def _scan_worker(self, generation: int, folder: str, query: str, recursive: bool,
-                     show_hidden: bool, stop: threading.Event) -> None:
+                     show_hidden: bool, stop: threading.Event, file_filter: str = "Tất cả") -> None:
         scanned = 0
         shown = 0
         errors = 0
@@ -559,6 +565,11 @@ class FileHub(Tk):
                             if recursive and is_dir:
                                 pending.append(entry.path)
                             if query and query not in entry.name.casefold():
+                                continue
+                            extensions = {"PDF": (".pdf",), "Excel": (".xls", ".xlsx", ".xlsm", ".csv"),
+                                          "Word": (".doc", ".docx", ".rtf"), "Ảnh": (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"),
+                                          "HTML": (".html", ".htm"), "Python": (".py",), "ZIP": (".zip", ".7z", ".rar")}
+                            if file_filter != "Tất cả" and (is_dir or not entry.name.casefold().endswith(extensions.get(file_filter, ()))):
                                 continue
                             batch.append(FileItem(entry.path, entry.name, is_dir, None if is_dir else stat.st_size,
                                                   stat.st_mtime, directory))
@@ -596,6 +607,9 @@ class FileHub(Tk):
                         suffix = " • Đạt giới hạn 10.000 mục, thu hẹp tìm kiếm" if capped else ""
                         suffix += f" • {errors} mục không đọc được" if errors else ""
                         self.status.set(msg + suffix)
+                elif kind == "op_progress":
+                    _, done, total, moving = event
+                    self.status.set(f"Đang {'di chuyển' if moving else 'sao chép'}: {done}/{total} mục")
                 elif kind == "op_done":
                     _, results, errors, copied, is_move = event
                     self.running_op = False
@@ -836,8 +850,10 @@ class FileHub(Tk):
                     else:
                         shutil.copy2(src, dest)
                     success += 1
+                    self.events.put(("op_progress", success + len(errors) - len(early_errors), len(paths), move))
                 except (OSError, shutil.Error) as exc:
                     errors.append(f"{Path(source).name}: {exc}")
+                    self.events.put(("op_progress", success + len(errors) - len(early_errors), len(paths), move))
             self.events.put(("op_done", success, errors, not move, move))
         threading.Thread(target=worker, daemon=True).start()
 
