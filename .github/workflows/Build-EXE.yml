@@ -38,7 +38,7 @@ jobs:
 
         run: |
 
-          pyinstaller --noconfirm --clean --onefile --windowed --name FileHubVN main.py
+          pyinstaller --noconfirm --clean --onefile --windowed --name FileHubVN app.py
 
       - name: Upload EXE
 
