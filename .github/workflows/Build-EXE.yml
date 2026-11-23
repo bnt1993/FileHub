@@ -3,6 +3,7 @@ name: Build FileHubVN EXE
 on:
 
   workflow_dispatch:
+  pull_request:
 
 jobs:
 
@@ -34,6 +35,11 @@ jobs:
 
           pip install pyinstaller
 
+      - name: Check syntax and tests
+        run: |
+          python -m compileall -q app.py filehub_tools.py
+          python -m unittest -v test_filehub_tools.py
+
       - name: Build EXE
 
         run: |
@@ -49,4 +55,5 @@ jobs:
           name: FileHubVN-Windows
 
           path: dist/FileHubVN.exe
+          retention-days: 14
  
