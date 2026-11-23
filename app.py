@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from filehub_tools import rename_plan, apply_renames, duplicates, export_csv, export_xlsx
+from filehub_security import hash_password, verify_password, protected_path, update_paths
 import os
 import queue
 import shutil
@@ -200,6 +201,8 @@ class FileHub(Tk):
         self.detail_path = StringVar(value="")
         self.favorites = [p for p in self.settings.get("favorites", []) if isinstance(p, str) and os.path.isdir(p)]
         self.favorite_files = [p for p in self.settings.get("favorite_files", []) if isinstance(p, str)]
+        self.protected_files = [p for p in self.settings.get("protected_files", []) if isinstance(p, str)]
+        self.edit_password = self.settings.get("edit_password")
         self.recents = [p for p in self.settings.get("recents", []) if isinstance(p, str) and os.path.isdir(p)]
         desktop = known_folders()[0][1]
         self.current_path = str(desktop if desktop.is_dir() else Path.home())
@@ -248,6 +251,7 @@ class FileHub(Tk):
         data = {
             "dark_mode": self.dark_mode.get(), "show_hidden": self.show_hidden.get(),
             "favorites": self.favorites, "favorite_files": self.favorite_files, "recents": self.recents[:12],
+            "protected_files": self.protected_files, "edit_password": self.edit_password,
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -342,7 +346,7 @@ class FileHub(Tk):
         extra.pack(fill="x", padx=13, pady=(0, 8))
         for name, command in (("Đổi tên hàng loạt", self.on_batch_rename), ("Xuất Excel/CSV", self.on_export),
                               ("Tìm file trùng", self.on_duplicates), ("Dừng quét", self.cancel_duplicates), ("Xem ảnh", self.preview_image),
-                              ("Mở thư mục chứa", self.open_containing_folder)):
+                              ("Mở thư mục chứa", self.open_containing_folder), ("Bảo vệ file", self.manage_protection)):
             self._button(extra, name, command).pack(side="left", padx=(0, 5))
         search_options = Frame(self.center, bg=p["panel"])
         search_options.pack(fill="x", padx=14, pady=(0, 7))
@@ -705,7 +709,9 @@ class FileHub(Tk):
         self.table.tag_configure("even", background=p["alternate"])
         for item in batch:
             self.items[item.path] = item
-            prefix = "★  " if item.path in self.favorite_files or item.path in self.favorites else ("▸  " if item.is_dir else "   ")
+            prefix = ("🔒  " if protected_path(item.path, self.protected_files) else
+                      ("★  " if item.path in self.favorite_files or item.path in self.favorites else
+                       ("▸  " if item.is_dir else "   ")))
             tags = ("dir",) if item.is_dir else (("even",) if len(self.items) % 2 == 0 else ())
             self.table.insert("", "end", iid=item.path,
                               values=(prefix + item.name, item.kind, file_size(item.size),
@@ -775,6 +781,7 @@ class FileHub(Tk):
         menu.add_command(label="Mở thư mục chứa", command=self.open_containing_folder)
         menu.add_command(label="Xem trước ảnh", command=self.preview_image)
         menu.add_command(label="Đổi tên hàng loạt", command=self.on_batch_rename)
+        menu.add_command(label="Bảo vệ / bỏ bảo vệ", command=self.manage_protection)
         menu.add_separator()
         menu.add_command(label="Sao chép", command=self.on_copy)
         menu.add_command(label="Cắt", command=self.on_cut)
@@ -817,6 +824,8 @@ class FileHub(Tk):
         if not selected:
             messagebox.showinfo("Đổi tên hàng loạt", "Chọn các file/thư mục trước.")
             return
+        if not self.authorize_edit([item.path for item in selected]):
+            return
         prefix = simpledialog.askstring("Đổi tên hàng loạt", "Tiền tố (có thể để trống):", parent=self)
         if prefix is None:
             return
@@ -838,6 +847,7 @@ class FileHub(Tk):
                 return
             apply_renames(plans)
             for old, new in plans:
+                self.protected_files = update_paths(self.protected_files, old, new)
                 if old in self.favorite_files:
                     self.favorite_files[self.favorite_files.index(old)] = new
                 if old in self.favorites:
@@ -937,6 +947,56 @@ class FileHub(Tk):
         label.configure(image=photo, text="")
         label.image = photo
 
+    def authorize_edit(self, paths: list[str]) -> bool:
+        if not any(protected_path(path, self.protected_files) for path in paths):
+            return True
+        if not isinstance(self.edit_password, dict):
+            messagebox.showerror("Bảo vệ", "Thiếu cấu hình mật khẩu. Không thể chỉnh sửa mục bảo vệ.")
+            return False
+        password = simpledialog.askstring("Xác thực chỉnh sửa", "Nhập mật khẩu để sửa mục được bảo vệ:",
+                                          show="*", parent=self)
+        if password is None:
+            return False
+        if not verify_password(password, self.edit_password):
+            messagebox.showerror("Sai mật khẩu", "Không được phép chỉnh sửa.")
+            return False
+        return True
+
+    def manage_protection(self) -> None:
+        selected = self.selected_items()
+        if len(selected) != 1:
+            messagebox.showinfo("Bảo vệ file", "Chọn một file hoặc thư mục.")
+            return
+        path = selected[0].path
+        if self.edit_password is None:
+            password = simpledialog.askstring("Tạo mật khẩu chỉnh sửa",
+                "Đặt mật khẩu tối thiểu 8 ký tự (không thể khôi phục nếu quên):",
+                show="*", parent=self)
+            if password is None:
+                return
+            confirm = simpledialog.askstring("Xác nhận mật khẩu", "Nhập lại mật khẩu:", show="*", parent=self)
+            if password != confirm:
+                messagebox.showerror("Mật khẩu", "Hai mật khẩu không trùng nhau.")
+                return
+            try:
+                self.edit_password = hash_password(password)
+            except ValueError as exc:
+                messagebox.showerror("Mật khẩu", str(exc))
+                return
+        else:
+            password = simpledialog.askstring("Xác thực", "Nhập mật khẩu quản lý bảo vệ:", show="*", parent=self)
+            if password is None or not verify_password(password, self.edit_password):
+                messagebox.showerror("Mật khẩu", "Không đúng mật khẩu.")
+                return
+        if path in self.protected_files:
+            self.protected_files.remove(path)
+            self.status.set(f"Đã bỏ khóa chỉnh sửa: {path}")
+        else:
+            self.protected_files.append(path)
+            self.status.set(f"Đã khóa chỉnh sửa trong FileHub: {path}")
+        self.save_settings()
+        self.refresh()
+
     def on_new_folder(self, event=None) -> None:
         if self.running_op:
             return
@@ -947,6 +1007,8 @@ class FileHub(Tk):
             messagebox.showerror("Tên không hợp lệ", "Tên không được rỗng, có dấu / hoặc \\ và các ký tự Windows bị cấm.")
             return
         path = Path(self.current_path) / name
+        if not self.authorize_edit([self.current_path]):
+            return
         try:
             path.mkdir()
             self.refresh()
@@ -970,11 +1032,15 @@ class FileHub(Tk):
             messagebox.showerror("Tên không hợp lệ", "Vui lòng nhập tên hợp lệ, không chứa ký tự cấm.")
             return "break"
         target = Path(item.parent) / name
+        if not self.authorize_edit([item.path]):
+            return "break"
         if target.exists():
             messagebox.showerror("Đã tồn tại", "Đã có tệp/thư mục trùng tên. Không ghi đè.")
             return "break"
         try:
             Path(item.path).rename(target)
+            self.protected_files = update_paths(self.protected_files, item.path, str(target))
+            self.save_settings()
             self.refresh()
         except OSError as exc:
             messagebox.showerror("Không thể đổi tên", str(exc))
@@ -1027,6 +1093,10 @@ class FileHub(Tk):
         if rejected and not valid:
             messagebox.showwarning("Không thể dán", "\n".join(rejected[:5]))
             return "break"
+        if self.clipboard_mode == "move" and not self.authorize_edit(valid):
+            return "break"
+        if not self.authorize_edit([dest_dir]):
+            return "break"
         self._perform_background_operation(valid, dest_dir, self.clipboard_mode == "move", rejected)
         return "break"
 
@@ -1062,6 +1132,8 @@ class FileHub(Tk):
             return "break"
         selected = collapse_nested([x.path for x in self.selected_items()])
         if not selected:
+            return "break"
+        if not self.authorize_edit(selected):
             return "break"
         if send2trash is None:
             messagebox.showerror("Thiếu chức năng Thùng rác", "Cần cài thư viện send2trash.\nChương trình không xóa vĩnh viễn để tránh mất dữ liệu.")
