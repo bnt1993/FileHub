@@ -119,3 +119,21 @@ FileHub yêu cầu mật khẩu trước khi đổi tên, đổi tên hàng lo�
 - Vẫn hỗ trợ Ctrl+X, Ctrl+C, Ctrl+V. File trùng tên được tự đổi tên đích để tránh ghi đè.
 - Các thao tác này sử dụng bộ nhớ sao chép **nội bộ FileHub**, không đồng bộ với clipboard file của Windows Explorer.
 - Khi dán/di chuyển vào hoặc ra vùng được bảo vệ, FileHub yêu cầu mật khẩu theo quy tắc bảo vệ hiện có.
+
+
+## Phím tắt như Windows Explorer
+
+| Phím | Thao tác |
+| --- | --- |
+| Ctrl+C | Sao chép file/thư mục đã chọn trong FileHub |
+| Ctrl+X | Cắt file/thư mục đã chọn trong FileHub |
+| Ctrl+V | Dán vào thư mục đang mở trong FileHub |
+| Ctrl+A | Chọn tất cả |
+| F2 | Đổi tên |
+| Delete | Chuyển vào Thùng rác |
+| F5 | Làm mới |
+| Ctrl+F | Đến ô tìm kiếm |
+| Alt+← / Alt+→ | Quay lại / Tiến tới |
+| Alt+↑ | Lên thư mục cha |
+
+Menu chuột phải hiển thị phím tắt. Khi đang nhập địa chỉ hoặc từ khóa tìm kiếm, Ctrl+C/X/V thao tác với văn bản, không thao tác file. Clipboard file vẫn là **nội bộ FileHub**, chưa liên thông với Windows Explorer.
