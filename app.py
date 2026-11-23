@@ -195,6 +195,7 @@ class FileHub(Tk):
         self.detail_date = StringVar(value="")
         self.detail_path = StringVar(value="")
         self.favorites = [p for p in self.settings.get("favorites", []) if isinstance(p, str) and os.path.isdir(p)]
+        self.favorite_files = [p for p in self.settings.get("favorite_files", []) if isinstance(p, str)]
         self.recents = [p for p in self.settings.get("recents", []) if isinstance(p, str) and os.path.isdir(p)]
         desktop = known_folders()[0][1]
         self.current_path = str(desktop if desktop.is_dir() else Path.home())
@@ -241,7 +242,7 @@ class FileHub(Tk):
         path = config_file()
         data = {
             "dark_mode": self.dark_mode.get(), "show_hidden": self.show_hidden.get(),
-            "favorites": self.favorites, "recents": self.recents[:12],
+            "favorites": self.favorites, "favorite_files": self.favorite_files, "recents": self.recents[:12],
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -431,7 +432,8 @@ class FileHub(Tk):
         self.sidebar_targets.clear()
         groups = [
             ("THƯ MỤC", [("⌂  " + title, str(path)) for title, path in known_folders() if path.is_dir()]),
-            ("YÊU THÍCH", [("★  " + Path(path).name, path) for path in self.favorites if os.path.isdir(path)]),
+            ("THƯ MỤC YÊU THÍCH", [("★  " + Path(path).name, path) for path in self.favorites if os.path.isdir(path)]),
+            ("FILE YÊU THÍCH", [("★  " + Path(path).name, path) for path in self.favorite_files]),
             ("Ổ ĐĨA", [("▣  " + root, root) for root in windows_drives()]),
             ("GẦN ĐÂY", [("◷  " + Path(path).name, path) for path in self.recents[:6] if os.path.isdir(path)]),
         ]
@@ -451,6 +453,13 @@ class FileHub(Tk):
         if target and os.path.isdir(target):
             self.search_query.set("")
             self.navigate(target)
+        elif target and os.path.isfile(target):
+            try:
+                open_in_system(target)
+            except OSError as exc:
+                messagebox.showerror("Không mở được file", str(exc))
+        elif target:
+            messagebox.showwarning("Không tìm thấy file", f"File yêu thích không còn ở đường dẫn:\n{target}")
 
     def _update_nav_buttons(self) -> None:
         if hasattr(self, "back_btn"):
@@ -636,7 +645,7 @@ class FileHub(Tk):
         self.table.tag_configure("even", background=p["alternate"])
         for item in batch:
             self.items[item.path] = item
-            prefix = "▸  " if item.is_dir else "   "
+            prefix = "★  " if item.path in self.favorite_files or item.path in self.favorites else ("▸  " if item.is_dir else "   ")
             tags = ("dir",) if item.is_dir else (("even",) if len(self.items) % 2 == 0 else ())
             self.table.insert("", "end", iid=item.path,
                               values=(prefix + item.name, item.kind, file_size(item.size),
@@ -711,7 +720,7 @@ class FileHub(Tk):
         menu.add_command(label="Sao chép đường dẫn", command=self.copy_paths_to_os)
         menu.add_separator()
         menu.add_command(label="Đổi tên (F2)", command=self.on_rename)
-        menu.add_command(label="Thêm vào yêu thích", command=self.on_add_favorite)
+        menu.add_command(label="Thêm / bỏ yêu thích", command=self.on_add_favorite)
         menu.add_command(label="Xóa vào Thùng rác (Del)", command=self.on_delete)
         menu.add_command(label="Thông tin", command=self.properties)
         try:
@@ -894,17 +903,24 @@ class FileHub(Tk):
 
     def on_add_favorite(self) -> None:
         selected = self.selected_items()
-        path = selected[0].path if len(selected) == 1 and selected[0].is_dir else self.current_path
-        if path not in self.favorites:
-            self.favorites.append(path)
-            self.save_settings()
-            self._sidebar_rebuild()
-            self.status.set(f"Đã thêm yêu thích: {path}")
+        if not selected:
+            path = self.current_path
+            favorites = self.favorites
+        elif len(selected) == 1:
+            path = selected[0].path
+            favorites = self.favorites if selected[0].is_dir else self.favorite_files
         else:
-            if messagebox.askyesno("Đã trong yêu thích", "Thư mục đã được yêu thích. Bỏ khỏi danh sách?"):
-                self.favorites.remove(path)
-                self.save_settings()
-                self._sidebar_rebuild()
+            self.status.set("Chọn một file hoặc thư mục để thêm vào yêu thích.")
+            return
+        if path in favorites:
+            favorites.remove(path)
+            self.status.set(f"Đã bỏ yêu thích: {path}")
+        else:
+            favorites.append(path)
+            self.status.set(f"Đã thêm yêu thích: {path}")
+        self.save_settings()
+        self._sidebar_rebuild()
+        self.refresh()
 
     def properties(self) -> None:
         selected = self.selected_items()
