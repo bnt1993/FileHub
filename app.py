@@ -671,6 +671,12 @@ class FileHub(Tk):
                         suffix = " • Đạt giới hạn 10.000 mục, thu hẹp tìm kiếm" if capped else ""
                         suffix += f" • {errors} mục không đọc được" if errors else ""
                         self.status.set(msg + suffix)
+                elif kind == "path_moved":
+                    _, old, new = event
+                    self.protected_files = update_paths(self.protected_files, old, new)
+                    self.favorite_files = update_paths(self.favorite_files, old, new)
+                    self.favorites = update_paths(self.favorites, old, new)
+                    self.save_settings()
                 elif kind == "duplicates_done":
                     _, groups, count, capped = event
                     self.running_op = False
@@ -1113,6 +1119,7 @@ class FileHub(Tk):
                     dest = collision_free_path(Path(dest_dir) / src.name)
                     if move:
                         shutil.move(str(src), str(dest))
+                        self.events.put(("path_moved", str(src), str(dest)))
                     elif src.is_dir():
                         shutil.copytree(src, dest, symlinks=True)
                     else:
