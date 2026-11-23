@@ -6,6 +6,7 @@ Python 3.10+; packaged for Windows with PyInstaller.
 from __future__ import annotations
 
 import json
+from filehub_tools import rename_plan, apply_renames, duplicates, export_csv, export_xlsx
 import os
 import queue
 import shutil
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import (
-    Tk, Frame, Label, Menu, StringVar, BooleanVar, Entry, Text,
+    Tk, Toplevel, PhotoImage, Frame, Label, Menu, StringVar, BooleanVar, Entry, Text,
     messagebox, simpledialog, filedialog, TclError,
 )
 from tkinter import ttk
@@ -186,6 +187,9 @@ class FileHub(Tk):
         self.show_details = BooleanVar(value=True)
         self.search_query = StringVar()
         self.extension_filter = StringVar(value="Tất cả")
+        self.time_filter = StringVar(value="Mọi thời điểm")
+        self.favorites_only = BooleanVar(value=False)
+        self.duplicate_stop = threading.Event()
         self.address = StringVar()
         self.status = StringVar(value="Sẵn sàng")
         self.summary = StringVar(value="")
@@ -214,6 +218,7 @@ class FileHub(Tk):
         self.sidebar_targets: dict[str, str] = {}
         self.search_query.trace_add("write", self._schedule_search)
         self.extension_filter.trace_add("write", self._schedule_search)
+        self.time_filter.trace_add("write", self._schedule_search)
         self._build_ui()
         self.navigate(self.current_path)
         self.after(120, self._handle_events)
@@ -333,6 +338,12 @@ class FileHub(Tk):
         ]
         for i, (name, callback) in enumerate(actions):
             self._button(toolbar, name, callback, style="Danger.TButton" if name == "Xóa" else "Tool.TButton").pack(side="left", padx=(0, 5))
+        extra = Frame(self.center, bg=p["panel"])
+        extra.pack(fill="x", padx=13, pady=(0, 8))
+        for name, command in (("Đổi tên hàng loạt", self.on_batch_rename), ("Xuất Excel/CSV", self.on_export),
+                              ("Tìm file trùng", self.on_duplicates), ("Xem ảnh", self.preview_image),
+                              ("Mở thư mục chứa", self.open_containing_folder)):
+            self._button(extra, name, command).pack(side="left", padx=(0, 5))
         search_options = Frame(self.center, bg=p["panel"])
         search_options.pack(fill="x", padx=14, pady=(0, 7))
         ttk.Checkbutton(search_options, text="Tìm cả thư mục con", variable=self.search_subfolders,
@@ -340,6 +351,10 @@ class FileHub(Tk):
         Label(search_options, text="Loại file:", bg=p["panel"], fg=p["muted"]).pack(side="left", padx=(0, 5))
         ttk.Combobox(search_options, textvariable=self.extension_filter, state="readonly", width=12,
                      values=("Tất cả", "PDF", "Excel", "Word", "Ảnh", "HTML", "Python", "ZIP")).pack(side="left", padx=(0, 15))
+        ttk.Combobox(search_options, textvariable=self.time_filter, state="readonly", width=15,
+                     values=("Mọi thời điểm", "Hôm nay", "7 ngày", "30 ngày", "365 ngày")).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(search_options, text="Chỉ yêu thích", variable=self.favorites_only,
+                        command=self.refresh, style="App.TCheckbutton").pack(side="left", padx=(0, 12))
         ttk.Checkbutton(search_options, text="Hiển thị tệp ẩn", variable=self.show_hidden,
                         command=self._toggle_hidden, style="App.TCheckbutton").pack(side="left")
 
@@ -546,16 +561,52 @@ class FileHub(Tk):
         recursive = bool(query and self.search_subfolders.get())
         show_hidden = self.show_hidden.get()
         file_filter = self.extension_filter.get()
+        time_filter = self.time_filter.get()
+        favorites_only = self.favorites_only.get()
+        favorite_paths = list(dict.fromkeys(self.favorites + self.favorite_files)) if favorites_only else []
         stop = self.scan_stop
         threading.Thread(target=self._scan_worker,
-                         args=(generation, folder, query, recursive, show_hidden, stop, file_filter), daemon=True).start()
+                         args=(generation, folder, query, recursive, show_hidden, stop, file_filter, time_filter, favorites_only, favorite_paths), daemon=True).start()
 
     def _scan_worker(self, generation: int, folder: str, query: str, recursive: bool,
-                     show_hidden: bool, stop: threading.Event, file_filter: str = "Tất cả") -> None:
+                     show_hidden: bool, stop: threading.Event, file_filter: str = "Tất cả",
+                     time_filter: str = "Mọi thời điểm", favorites_only: bool = False,
+                     favorite_paths: list[str] | None = None) -> None:
         scanned = 0
         shown = 0
         errors = 0
         batch = []
+        cutoff = {"Hôm nay": 1, "7 ngày": 7, "30 ngày": 30, "365 ngày": 365}.get(time_filter)
+        if cutoff is not None:
+            import time
+            cutoff = time.time() - cutoff * 86400
+        extensions = {"PDF": (".pdf",), "Excel": (".xls", ".xlsx", ".xlsm", ".csv"),
+                      "Word": (".doc", ".docx", ".rtf"), "Ảnh": (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"),
+                      "HTML": (".html", ".htm"), "Python": (".py",), "ZIP": (".zip", ".7z", ".rar")}
+        if favorites_only:
+            for item_path in favorite_paths or []:
+                if stop.is_set():
+                    return
+                try:
+                    stat = os.stat(item_path)
+                    is_dir = os.path.isdir(item_path)
+                    name = os.path.basename(item_path.rstrip("\\\\")) or item_path
+                    scanned += 1
+                    if query and query not in name.casefold():
+                        continue
+                    if cutoff is not None and stat.st_mtime < cutoff:
+                        continue
+                    if file_filter != "Tất cả" and (is_dir or not name.casefold().endswith(extensions.get(file_filter, ()))):
+                        continue
+                    batch.append(FileItem(item_path, name, is_dir, None if is_dir else stat.st_size,
+                                          stat.st_mtime, str(Path(item_path).parent)))
+                    shown += 1
+                except OSError:
+                    errors += 1
+            if batch:
+                self.events.put(("scan_batch", generation, batch))
+            self.events.put(("scan_done", generation, shown, scanned, errors, False))
+            return
         pending = [folder]
         capped = False
         while pending and not stop.is_set() and not capped:
@@ -575,9 +626,8 @@ class FileHub(Tk):
                                 pending.append(entry.path)
                             if query and query not in entry.name.casefold():
                                 continue
-                            extensions = {"PDF": (".pdf",), "Excel": (".xls", ".xlsx", ".xlsm", ".csv"),
-                                          "Word": (".doc", ".docx", ".rtf"), "Ảnh": (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"),
-                                          "HTML": (".html", ".htm"), "Python": (".py",), "ZIP": (".zip", ".7z", ".rar")}
+                            if cutoff is not None and stat.st_mtime < cutoff:
+                                continue
                             if file_filter != "Tất cả" and (is_dir or not entry.name.casefold().endswith(extensions.get(file_filter, ()))):
                                 continue
                             batch.append(FileItem(entry.path, entry.name, is_dir, None if is_dir else stat.st_size,
@@ -616,6 +666,12 @@ class FileHub(Tk):
                         suffix = " • Đạt giới hạn 10.000 mục, thu hẹp tìm kiếm" if capped else ""
                         suffix += f" • {errors} mục không đọc được" if errors else ""
                         self.status.set(msg + suffix)
+                elif kind == "duplicates_done":
+                    _, groups, count, capped = event
+                    self.running_op = False
+                    self.progress.stop()
+                    self.progress.pack_forget()
+                    self._show_duplicates(groups, count, capped)
                 elif kind == "op_progress":
                     _, done, total, moving = event
                     self.status.set(f"Đang {'di chuyển' if moving else 'sao chép'}: {done}/{total} mục")
@@ -713,6 +769,8 @@ class FileHub(Tk):
         menu = Menu(self, tearoff=False, bg=p["panel"], fg=p["text"], activebackground=p["soft"], activeforeground=p["text"])
         menu.add_command(label="Mở", command=self.open_selection)
         menu.add_command(label="Mở thư mục chứa", command=self.open_containing_folder)
+        menu.add_command(label="Xem trước ảnh", command=self.preview_image)
+        menu.add_command(label="Đổi tên hàng loạt", command=self.on_batch_rename)
         menu.add_separator()
         menu.add_command(label="Sao chép", command=self.on_copy)
         menu.add_command(label="Cắt", command=self.on_cut)
@@ -747,6 +805,126 @@ class FileHub(Tk):
         if selected:
             self.search_query.set("")
             self.navigate(selected[0].parent)
+
+    def on_batch_rename(self) -> None:
+        if self.running_op:
+            return
+        selected = self.selected_items()
+        if not selected:
+            messagebox.showinfo("Đổi tên hàng loạt", "Chọn các file/thư mục trước.")
+            return
+        prefix = simpledialog.askstring("Đổi tên hàng loạt", "Tiền tố (có thể để trống):", parent=self)
+        if prefix is None:
+            return
+        suffix = simpledialog.askstring("Đổi tên hàng loạt", "Hậu tố (có thể để trống):", parent=self)
+        if suffix is None:
+            return
+        numbering = messagebox.askyesno("Đánh số", "Thêm số thứ tự 1_, 2_, ...?")
+        if not prefix and not suffix and not numbering:
+            return
+        try:
+            paths = [item.path for item in selected]
+            plans = rename_plan(paths, prefix, suffix, 1 if numbering else 0)
+            if not plans:
+                return
+            preview = "\\n".join(f"{Path(a).name} → {Path(b).name}" for a, b in plans[:8])
+            if not messagebox.askyesno("Xác nhận đổi tên", f"Đổi tên {len(plans)} mục?\\n\\n{preview}"):
+                return
+            apply_renames(plans)
+            for old, new in plans:
+                if old in self.favorite_files:
+                    self.favorite_files[self.favorite_files.index(old)] = new
+                if old in self.favorites:
+                    self.favorites[self.favorites.index(old)] = new
+            self.save_settings()
+            self._sidebar_rebuild()
+            self.refresh()
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Không thể đổi tên", str(exc))
+
+    def on_export(self) -> None:
+        items = self.selected_items() or list(self.items.values())
+        if not items:
+            messagebox.showinfo("Xuất danh sách", "Không có dữ liệu.")
+            return
+        target = filedialog.asksaveasfilename(parent=self, defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx"), ("CSV", "*.csv")], initialfile="FileHub_DanhSach.xlsx")
+        if not target:
+            return
+        records = [(item.name, item.kind, item.size if item.size is not None else "",
+                    timestamp_string(item.modified), item.path) for item in items]
+        try:
+            if target.lower().endswith(".csv"):
+                export_csv(target, records)
+            else:
+                export_xlsx(target, records)
+            self.status.set(f"Đã xuất {len(records)} mục: {target}")
+        except OSError as exc:
+            messagebox.showerror("Xuất thất bại", str(exc))
+
+    def on_duplicates(self) -> None:
+        if self.running_op:
+            return
+        if not messagebox.askyesno("Tìm file trùng", "Quét tối đa 50.000 file trong thư mục hiện tại và thư mục con?\\nChỉ đọc, không xóa file."):
+            return
+        self.running_op = True
+        self.duplicate_stop = threading.Event()
+        self.progress.pack(fill="x", padx=13, pady=(0, 8))
+        self.progress.start(12)
+        self.status.set("Đang so sánh dung lượng và SHA-256...")
+        def worker():
+            try:
+                result = duplicates(self.current_path, self.duplicate_stop)
+                self.events.put(("duplicates_done", *result))
+            except Exception as exc:
+                self.events.put(("duplicates_done", [], 0, False))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_duplicates(self, groups, count, capped) -> None:
+        win = Toplevel(self)
+        win.title("File trùng lặp – chỉ xem")
+        win.geometry("850x510")
+        Label(win, text=f"Đã quét {count} file • {len(groups)} nhóm trùng" +
+              (" • đạt giới hạn 50.000" if capped else "")).pack(pady=8)
+        view = Text(win, wrap="none")
+        view.pack(fill="both", expand=True, padx=10, pady=8)
+        for index, group in enumerate(groups, 1):
+            view.insert("end", f"Nhóm {index} ({len(group)} file):\\n" + "\\n".join(group) + "\\n\\n")
+        view.configure(state="disabled")
+        self.status.set(f"Đã tìm thấy {len(groups)} nhóm file trùng. Không xóa dữ liệu.")
+
+    def preview_image(self) -> None:
+        selected = self.selected_items()
+        if len(selected) != 1 or selected[0].is_dir:
+            messagebox.showinfo("Xem ảnh", "Chọn một file ảnh.")
+            return
+        path = selected[0].path
+        if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"):
+            messagebox.showinfo("Xem ảnh", "File đã chọn không phải ảnh được hỗ trợ.")
+            return
+        win = Toplevel(self)
+        win.title("Xem trước – " + Path(path).name)
+        win.geometry("780x590")
+        label = Label(win, text="Đang tải ảnh...")
+        label.pack(fill="both", expand=True, padx=10, pady=10)
+        try:
+            from PIL import Image, ImageTk
+            with Image.open(path) as img:
+                img.thumbnail((740, 520))
+                photo = ImageTk.PhotoImage(img.copy(), master=win)
+        except ImportError:
+            try:
+                photo = PhotoImage(file=path, master=win)
+                factor = max(1, (max(photo.width(), photo.height()) + 739) // 740)
+                photo = photo.subsample(factor)
+            except (TclError, OSError) as exc:
+                label.configure(text="Cần Pillow để xem JPG/BMP/WebP.\\n" + str(exc))
+                return
+        except (OSError, ValueError) as exc:
+            label.configure(text="Không đọc được ảnh: " + str(exc))
+            return
+        label.configure(image=photo, text="")
+        label.image = photo
 
     def on_new_folder(self, event=None) -> None:
         if self.running_op:
