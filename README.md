@@ -27,11 +27,11 @@
 
 ### Không muốn cài Python trên máy cá nhân?
 
-Có thể dùng **GitHub Actions** có sẵn trong `.github/workflows/build-windows.yml`:
+Có thể dùng **GitHub Actions** có sẵn trong `.github/workflows/Build-EXE.yml`:
 
 1. Tạo repository GitHub mới, tải toàn bộ nội dung dự án lên, bao gồm thư mục `.github`.
-2. Vào **Actions** → **Build Windows portable EXE** → **Run workflow**.
-3. Mở lần chạy thành công, tải artifact **FileHubVN-Windows-EXE**, giải nén để lấy `FileHubVN.exe`.
+2. Vào **Actions** → **Build FileHubVN EXE** → **Run workflow**.
+3. Mở lần chạy thành công, tải artifact **FileHubVN-Windows**, giải nén để lấy `FileHubVN.exe`.
 
 ## Phím tắt
 
@@ -68,7 +68,7 @@ Có thể dùng **GitHub Actions** có sẵn trong `.github/workflows/build-wind
 - `requirements.txt`: thư viện xóa an toàn và đóng gói.
 - `build_exe_windows.bat`: tạo file `.exe` portable.
 - `run_python_windows.bat`: chạy mã nguồn trực tiếp (cần `pip install send2trash`).
-- `.github/workflows/build-windows.yml`: build EXE bằng GitHub Actions trên Windows.
+- `.github/workflows/Build-EXE.yml`: build EXE bằng GitHub Actions trên Windows.
 - `tests/test_fileops.py`: kiểm thử logic quản lý file và đường dẫn.
 - `tests/test_gui_actions.py`: kiểm thử giao diện và tác vụ sao chép/di chuyển.
 - `preview.png`: ảnh xem trước giao diện (dữ liệu minh họa).
@@ -82,3 +82,40 @@ python app.py
 ```
 
 Ứng dụng ưu tiên tiếng Việt; yêu cầu Python 3.10+ và Windows 10/11 cho tệp `.exe`.
+
+
+## Nâng cấp công cụ (FileHub VN)
+
+- **Chỉ yêu thích:** bật bộ lọc trong thanh tìm kiếm để xem file và thư mục đã đánh dấu ★. Có thể kết hợp từ khóa, loại file, ngày sửa.
+- **Mở thư mục chứa:** chọn file rồi bấm nút tương ứng, hoặc chuột phải. File yêu thích trên thanh bên vẫn mở trực tiếp bằng chương trình Windows.
+- **Đổi tên hàng loạt:** chọn nhiều mục, thêm tiền tố/hậu tố hoặc số thứ tự. Ứng dụng kiểm tra tên trùng và hỏi xác nhận.
+- **Thời gian:** lọc hôm nay, 7/30/365 ngày theo ngày sửa file.
+- **Tìm file trùng:** quét tối đa 50.000 file từ thư mục hiện tại, nhóm theo dung lượng rồi SHA-256; **chỉ báo cáo, không xóa**. Có nút Dừng quét.
+- **Xuất Excel/CSV:** xuất các mục đang chọn, hoặc toàn bộ kết quả đang hiển thị; XLSX được tạo bằng thư viện chuẩn Python.
+- **Xem trước ảnh:** chọn một file ảnh và bấm Xem ảnh. Pillow hỗ trợ JPG/PNG/GIF/BMP/WebP; ảnh được thu nhỏ trước khi hiển thị.
+
+### An toàn và giới hạn
+- Tất cả thao tác offline; không thêm dịch vụ hoặc tài khoản.
+- Quét trùng lặp có thể chậm trên ổ mạng và file lớn; dữ liệu chỉ được đọc.
+- Đổi tên hàng loạt không di chuyển nội dung file; vẫn nên thử với file mẫu trước khi sử dụng dữ liệu quan trọng.
+- File yêu thích lưu đường dẫn, không tự tìm lại nếu file được chuyển/đổi tên bên ngoài ứng dụng.
+- GitHub Actions chạy kiểm tra cú pháp và các bài test trước khi đóng gói EXE.
+
+
+## Bảo vệ chỉnh sửa bằng mật khẩu (trong FileHub)
+
+Chọn một file/thư mục → **Bảo vệ file** hoặc chuột phải → **Bảo vệ / bỏ bảo vệ**. Lần đầu tạo mật khẩu tối thiểu 8 ký tự. Các lần tiếp theo cần mật khẩu để bật/tắt bảo vệ. File/thư mục được khóa có biểu tượng 🔒. Khóa thư mục áp dụng cho các file con.
+
+FileHub yêu cầu mật khẩu trước khi đổi tên, đổi tên hàng loạt, di chuyển, xóa, tạo thư mục con hoặc dán vào thư mục được bảo vệ. Mật khẩu chỉ lưu dạng băm PBKDF2-HMAC-SHA256 có muối ngẫu nhiên trong cấu hình người dùng.
+
+**Giới hạn bảo mật quan trọng:** Đây là khóa thao tác ở cấp ứng dụng, **không phải quyền NTFS, không mã hóa file và không ngăn chỉnh sửa từ Windows Explorer, Word hoặc ứng dụng khác**. Người có quyền truy cập tài khoản Windows và file cấu hình có thể can thiệp vào cài đặt khóa. Không dùng thay thế BitLocker/EFS hoặc quyền truy cập Windows do quản trị viên cấu hình. Nếu quên mật khẩu, ứng dụng không cung cấp tính năng khôi phục.
+
+
+## Chuột phải: Cắt / Sao chép / Dán
+
+- Chuột phải vào file → **Cắt file đã chọn** hoặc **Sao chép file đã chọn**.
+- Chuột phải vào một thư mục → **Dán vào thư mục này** để đưa file đã cắt/sao chép vào đó mà không cần mở thư mục.
+- Chuột phải vào vùng trống → **Dán vào thư mục đang xem**.
+- Vẫn hỗ trợ Ctrl+X, Ctrl+C, Ctrl+V. File trùng tên được tự đổi tên đích để tránh ghi đè.
+- Các thao tác này sử dụng bộ nhớ sao chép **nội bộ FileHub**, không đồng bộ với clipboard file của Windows Explorer.
+- Khi dán/di chuyển vào hoặc ra vùng được bảo vệ, FileHub yêu cầu mật khẩu theo quy tắc bảo vệ hiện có.

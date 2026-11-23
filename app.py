@@ -6,6 +6,8 @@ Python 3.10+; packaged for Windows with PyInstaller.
 from __future__ import annotations
 
 import json
+from filehub_tools import rename_plan, apply_renames, duplicates, export_csv, export_xlsx
+from filehub_security import hash_password, verify_password, protected_path, update_paths
 import os
 import queue
 import shutil
@@ -16,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from tkinter import (
-    Tk, Frame, Label, Menu, StringVar, BooleanVar, Entry, Text,
+    Tk, Toplevel, PhotoImage, Frame, Label, Menu, StringVar, BooleanVar, Entry, Text,
     messagebox, simpledialog, filedialog, TclError,
 )
 from tkinter import ttk
@@ -186,6 +188,9 @@ class FileHub(Tk):
         self.show_details = BooleanVar(value=True)
         self.search_query = StringVar()
         self.extension_filter = StringVar(value="Tất cả")
+        self.time_filter = StringVar(value="Mọi thời điểm")
+        self.favorites_only = BooleanVar(value=False)
+        self.duplicate_stop = threading.Event()
         self.address = StringVar()
         self.status = StringVar(value="Sẵn sàng")
         self.summary = StringVar(value="")
@@ -195,6 +200,9 @@ class FileHub(Tk):
         self.detail_date = StringVar(value="")
         self.detail_path = StringVar(value="")
         self.favorites = [p for p in self.settings.get("favorites", []) if isinstance(p, str) and os.path.isdir(p)]
+        self.favorite_files = [p for p in self.settings.get("favorite_files", []) if isinstance(p, str)]
+        self.protected_files = [p for p in self.settings.get("protected_files", []) if isinstance(p, str)]
+        self.edit_password = self.settings.get("edit_password")
         self.recents = [p for p in self.settings.get("recents", []) if isinstance(p, str) and os.path.isdir(p)]
         desktop = known_folders()[0][1]
         self.current_path = str(desktop if desktop.is_dir() else Path.home())
@@ -213,6 +221,7 @@ class FileHub(Tk):
         self.sidebar_targets: dict[str, str] = {}
         self.search_query.trace_add("write", self._schedule_search)
         self.extension_filter.trace_add("write", self._schedule_search)
+        self.time_filter.trace_add("write", self._schedule_search)
         self._build_ui()
         self.navigate(self.current_path)
         self.after(120, self._handle_events)
@@ -241,7 +250,8 @@ class FileHub(Tk):
         path = config_file()
         data = {
             "dark_mode": self.dark_mode.get(), "show_hidden": self.show_hidden.get(),
-            "favorites": self.favorites, "recents": self.recents[:12],
+            "favorites": self.favorites, "favorite_files": self.favorite_files, "recents": self.recents[:12],
+            "protected_files": self.protected_files, "edit_password": self.edit_password,
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -332,6 +342,12 @@ class FileHub(Tk):
         ]
         for i, (name, callback) in enumerate(actions):
             self._button(toolbar, name, callback, style="Danger.TButton" if name == "Xóa" else "Tool.TButton").pack(side="left", padx=(0, 5))
+        extra = Frame(self.center, bg=p["panel"])
+        extra.pack(fill="x", padx=13, pady=(0, 8))
+        for name, command in (("Đổi tên hàng loạt", self.on_batch_rename), ("Xuất Excel/CSV", self.on_export),
+                              ("Tìm file trùng", self.on_duplicates), ("Dừng quét", self.cancel_duplicates), ("Xem ảnh", self.preview_image),
+                              ("Mở thư mục chứa", self.open_containing_folder), ("Bảo vệ file", self.manage_protection)):
+            self._button(extra, name, command).pack(side="left", padx=(0, 5))
         search_options = Frame(self.center, bg=p["panel"])
         search_options.pack(fill="x", padx=14, pady=(0, 7))
         ttk.Checkbutton(search_options, text="Tìm cả thư mục con", variable=self.search_subfolders,
@@ -339,6 +355,10 @@ class FileHub(Tk):
         Label(search_options, text="Loại file:", bg=p["panel"], fg=p["muted"]).pack(side="left", padx=(0, 5))
         ttk.Combobox(search_options, textvariable=self.extension_filter, state="readonly", width=12,
                      values=("Tất cả", "PDF", "Excel", "Word", "Ảnh", "HTML", "Python", "ZIP")).pack(side="left", padx=(0, 15))
+        ttk.Combobox(search_options, textvariable=self.time_filter, state="readonly", width=15,
+                     values=("Mọi thời điểm", "Hôm nay", "7 ngày", "30 ngày", "365 ngày")).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(search_options, text="Chỉ yêu thích", variable=self.favorites_only,
+                        command=self.refresh, style="App.TCheckbutton").pack(side="left", padx=(0, 12))
         ttk.Checkbutton(search_options, text="Hiển thị tệp ẩn", variable=self.show_hidden,
                         command=self._toggle_hidden, style="App.TCheckbutton").pack(side="left")
 
@@ -431,7 +451,8 @@ class FileHub(Tk):
         self.sidebar_targets.clear()
         groups = [
             ("THƯ MỤC", [("⌂  " + title, str(path)) for title, path in known_folders() if path.is_dir()]),
-            ("YÊU THÍCH", [("★  " + Path(path).name, path) for path in self.favorites if os.path.isdir(path)]),
+            ("THƯ MỤC YÊU THÍCH", [("★  " + Path(path).name, path) for path in self.favorites if os.path.isdir(path)]),
+            ("FILE YÊU THÍCH", [("★  " + Path(path).name, path) for path in self.favorite_files]),
             ("Ổ ĐĨA", [("▣  " + root, root) for root in windows_drives()]),
             ("GẦN ĐÂY", [("◷  " + Path(path).name, path) for path in self.recents[:6] if os.path.isdir(path)]),
         ]
@@ -451,6 +472,13 @@ class FileHub(Tk):
         if target and os.path.isdir(target):
             self.search_query.set("")
             self.navigate(target)
+        elif target and os.path.isfile(target):
+            try:
+                open_in_system(target)
+            except OSError as exc:
+                messagebox.showerror("Không mở được file", str(exc))
+        elif target:
+            messagebox.showwarning("Không tìm thấy file", f"File yêu thích không còn ở đường dẫn:\n{target}")
 
     def _update_nav_buttons(self) -> None:
         if hasattr(self, "back_btn"):
@@ -537,16 +565,53 @@ class FileHub(Tk):
         recursive = bool(query and self.search_subfolders.get())
         show_hidden = self.show_hidden.get()
         file_filter = self.extension_filter.get()
+        time_filter = self.time_filter.get()
+        favorites_only = self.favorites_only.get()
+        favorite_paths = list(dict.fromkeys(self.favorites + self.favorite_files)) if favorites_only else []
         stop = self.scan_stop
         threading.Thread(target=self._scan_worker,
-                         args=(generation, folder, query, recursive, show_hidden, stop, file_filter), daemon=True).start()
+                         args=(generation, folder, query, recursive, show_hidden, stop, file_filter, time_filter, favorites_only, favorite_paths), daemon=True).start()
 
     def _scan_worker(self, generation: int, folder: str, query: str, recursive: bool,
-                     show_hidden: bool, stop: threading.Event, file_filter: str = "Tất cả") -> None:
+                     show_hidden: bool, stop: threading.Event, file_filter: str = "Tất cả",
+                     time_filter: str = "Mọi thời điểm", favorites_only: bool = False,
+                     favorite_paths: list[str] | None = None) -> None:
         scanned = 0
         shown = 0
         errors = 0
         batch = []
+        cutoff = {"Hôm nay": 1, "7 ngày": 7, "30 ngày": 30, "365 ngày": 365}.get(time_filter)
+        if cutoff is not None:
+            import time
+            cutoff = (datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                      if time_filter == "Hôm nay" else time.time() - cutoff * 86400)
+        extensions = {"PDF": (".pdf",), "Excel": (".xls", ".xlsx", ".xlsm", ".csv"),
+                      "Word": (".doc", ".docx", ".rtf"), "Ảnh": (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"),
+                      "HTML": (".html", ".htm"), "Python": (".py",), "ZIP": (".zip", ".7z", ".rar")}
+        if favorites_only:
+            for item_path in favorite_paths or []:
+                if stop.is_set():
+                    return
+                try:
+                    stat = os.stat(item_path)
+                    is_dir = os.path.isdir(item_path)
+                    name = os.path.basename(item_path.rstrip("\\\\")) or item_path
+                    scanned += 1
+                    if query and query not in name.casefold():
+                        continue
+                    if cutoff is not None and stat.st_mtime < cutoff:
+                        continue
+                    if file_filter != "Tất cả" and (is_dir or not name.casefold().endswith(extensions.get(file_filter, ()))):
+                        continue
+                    batch.append(FileItem(item_path, name, is_dir, None if is_dir else stat.st_size,
+                                          stat.st_mtime, str(Path(item_path).parent)))
+                    shown += 1
+                except OSError:
+                    errors += 1
+            if batch:
+                self.events.put(("scan_batch", generation, batch))
+            self.events.put(("scan_done", generation, shown, scanned, errors, False))
+            return
         pending = [folder]
         capped = False
         while pending and not stop.is_set() and not capped:
@@ -566,9 +631,8 @@ class FileHub(Tk):
                                 pending.append(entry.path)
                             if query and query not in entry.name.casefold():
                                 continue
-                            extensions = {"PDF": (".pdf",), "Excel": (".xls", ".xlsx", ".xlsm", ".csv"),
-                                          "Word": (".doc", ".docx", ".rtf"), "Ảnh": (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"),
-                                          "HTML": (".html", ".htm"), "Python": (".py",), "ZIP": (".zip", ".7z", ".rar")}
+                            if cutoff is not None and stat.st_mtime < cutoff:
+                                continue
                             if file_filter != "Tất cả" and (is_dir or not entry.name.casefold().endswith(extensions.get(file_filter, ()))):
                                 continue
                             batch.append(FileItem(entry.path, entry.name, is_dir, None if is_dir else stat.st_size,
@@ -607,6 +671,21 @@ class FileHub(Tk):
                         suffix = " • Đạt giới hạn 10.000 mục, thu hẹp tìm kiếm" if capped else ""
                         suffix += f" • {errors} mục không đọc được" if errors else ""
                         self.status.set(msg + suffix)
+                elif kind == "path_moved":
+                    _, old, new = event
+                    self.protected_files = update_paths(self.protected_files, old, new)
+                    self.favorite_files = update_paths(self.favorite_files, old, new)
+                    self.favorites = update_paths(self.favorites, old, new)
+                    self.save_settings()
+                elif kind == "duplicates_done":
+                    _, groups, count, capped = event
+                    self.running_op = False
+                    self.progress.stop()
+                    self.progress.pack_forget()
+                    if self.duplicate_stop.is_set():
+                        self.status.set("Đã hủy quét file trùng.")
+                    else:
+                        self._show_duplicates(groups, count, capped)
                 elif kind == "op_progress":
                     _, done, total, moving = event
                     self.status.set(f"Đang {'di chuyển' if moving else 'sao chép'}: {done}/{total} mục")
@@ -636,7 +715,9 @@ class FileHub(Tk):
         self.table.tag_configure("even", background=p["alternate"])
         for item in batch:
             self.items[item.path] = item
-            prefix = "▸  " if item.is_dir else "   "
+            prefix = ("🔒  " if protected_path(item.path, self.protected_files) else
+                      ("★  " if item.path in self.favorite_files or item.path in self.favorites else
+                       ("▸  " if item.is_dir else "   ")))
             tags = ("dir",) if item.is_dir else (("even",) if len(self.items) % 2 == 0 else ())
             self.table.insert("", "end", iid=item.path,
                               values=(prefix + item.name, item.kind, file_size(item.size),
@@ -698,20 +779,33 @@ class FileHub(Tk):
 
     def _context_menu(self, event) -> None:
         row = self.table.identify_row(event.y)
-        if row and row not in self.table.selection():
-            self.table.selection_set(row)
+        if row:
+            # Right-click acts on the item under the pointer, not a stale selection.
+            if row not in self.table.selection():
+                self.table.selection_set(row)
+            self.table.focus(row)
+        else:
+            self.table.selection_remove(*self.table.selection())
         p = self.palette()
         menu = Menu(self, tearoff=False, bg=p["panel"], fg=p["text"], activebackground=p["soft"], activeforeground=p["text"])
         menu.add_command(label="Mở", command=self.open_selection)
         menu.add_command(label="Mở thư mục chứa", command=self.open_containing_folder)
+        menu.add_command(label="Xem trước ảnh", command=self.preview_image)
+        menu.add_command(label="Đổi tên hàng loạt", command=self.on_batch_rename)
+        menu.add_command(label="Bảo vệ / bỏ bảo vệ", command=self.manage_protection)
         menu.add_separator()
-        menu.add_command(label="Sao chép", command=self.on_copy)
-        menu.add_command(label="Cắt", command=self.on_cut)
-        menu.add_command(label="Dán vào thư mục đang xem", command=self.on_paste)
+        menu.add_command(label="Cắt file đã chọn", command=self.on_cut, state="normal" if row else "disabled")
+        menu.add_command(label="Sao chép file đã chọn", command=self.on_copy, state="normal" if row else "disabled")
+        target = self.items.get(row) if row else None
+        if target and target.is_dir:
+            menu.add_command(label="Dán vào thư mục này", command=lambda dest=target.path: self.on_paste(destination=dest),
+                             state="normal" if self.clipboard_paths else "disabled")
+        menu.add_command(label="Dán vào thư mục đang xem", command=self.on_paste,
+                         state="normal" if self.clipboard_paths else "disabled")
         menu.add_command(label="Sao chép đường dẫn", command=self.copy_paths_to_os)
         menu.add_separator()
         menu.add_command(label="Đổi tên (F2)", command=self.on_rename)
-        menu.add_command(label="Thêm vào yêu thích", command=self.on_add_favorite)
+        menu.add_command(label="Thêm / bỏ yêu thích", command=self.on_add_favorite)
         menu.add_command(label="Xóa vào Thùng rác (Del)", command=self.on_delete)
         menu.add_command(label="Thông tin", command=self.properties)
         try:
@@ -739,6 +833,186 @@ class FileHub(Tk):
             self.search_query.set("")
             self.navigate(selected[0].parent)
 
+    def on_batch_rename(self) -> None:
+        if self.running_op:
+            return
+        selected = self.selected_items()
+        if not selected:
+            messagebox.showinfo("Đổi tên hàng loạt", "Chọn các file/thư mục trước.")
+            return
+        if not self.authorize_edit([item.path for item in selected]):
+            return
+        prefix = simpledialog.askstring("Đổi tên hàng loạt", "Tiền tố (có thể để trống):", parent=self)
+        if prefix is None:
+            return
+        suffix = simpledialog.askstring("Đổi tên hàng loạt", "Hậu tố (có thể để trống):", parent=self)
+        if suffix is None:
+            return
+        numbering = messagebox.askyesno("Đánh số", "Thêm số thứ tự 1_, 2_, ...?")
+        if not prefix and not suffix and not numbering:
+            return
+        try:
+            paths = [item.path for item in selected]
+            plans = rename_plan(paths, prefix, suffix, 1 if numbering else 0)
+            if not plans:
+                return
+            if any(not valid_new_name(Path(dest).name) for _, dest in plans):
+                raise ValueError("Tên file không hợp lệ trên Windows.")
+            preview = "\n".join(f"{Path(a).name} → {Path(b).name}" for a, b in plans[:8])
+            if not messagebox.askyesno("Xác nhận đổi tên", f"Đổi tên {len(plans)} mục?\n\n{preview}"):
+                return
+            apply_renames(plans)
+            for old, new in plans:
+                self.protected_files = update_paths(self.protected_files, old, new)
+                if old in self.favorite_files:
+                    self.favorite_files[self.favorite_files.index(old)] = new
+                if old in self.favorites:
+                    self.favorites[self.favorites.index(old)] = new
+            self.save_settings()
+            self._sidebar_rebuild()
+            self.refresh()
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Không thể đổi tên", str(exc))
+
+    def on_export(self) -> None:
+        items = self.selected_items() or list(self.items.values())
+        if not items:
+            messagebox.showinfo("Xuất danh sách", "Không có dữ liệu.")
+            return
+        target = filedialog.asksaveasfilename(parent=self, defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx"), ("CSV", "*.csv")], initialfile="FileHub_DanhSach.xlsx")
+        if not target:
+            return
+        records = [(item.name, item.kind, item.size if item.size is not None else "",
+                    timestamp_string(item.modified), item.path) for item in items]
+        try:
+            if target.lower().endswith(".csv"):
+                export_csv(target, records)
+            else:
+                export_xlsx(target, records)
+            self.status.set(f"Đã xuất {len(records)} mục: {target}")
+        except OSError as exc:
+            messagebox.showerror("Xuất thất bại", str(exc))
+
+    def cancel_duplicates(self) -> None:
+        if self.running_op and not self.duplicate_stop.is_set():
+            self.duplicate_stop.set()
+            self.status.set("Đang dừng quét file trùng...")
+
+    def on_duplicates(self) -> None:
+        if self.running_op:
+            return
+        if not messagebox.askyesno("Tìm file trùng", "Quét tối đa 50.000 file trong thư mục hiện tại và thư mục con?\\nChỉ đọc, không xóa file."):
+            return
+        self.running_op = True
+        self.duplicate_stop = threading.Event()
+        self.progress.pack(fill="x", padx=13, pady=(0, 8))
+        self.progress.start(12)
+        self.status.set("Đang so sánh dung lượng và SHA-256...")
+        def worker():
+            try:
+                result = duplicates(self.current_path, self.duplicate_stop)
+                self.events.put(("duplicates_done", *result))
+            except Exception as exc:
+                self.events.put(("duplicates_done", [], 0, False))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_duplicates(self, groups, count, capped) -> None:
+        win = Toplevel(self)
+        win.title("File trùng lặp – chỉ xem")
+        win.geometry("850x510")
+        Label(win, text=f"Đã quét {count} file • {len(groups)} nhóm trùng" +
+              (" • đạt giới hạn 50.000" if capped else "")).pack(pady=8)
+        view = Text(win, wrap="none")
+        view.pack(fill="both", expand=True, padx=10, pady=8)
+        for index, group in enumerate(groups, 1):
+            view.insert("end", f"Nhóm {index} ({len(group)} file):\\n" + "\\n".join(group) + "\\n\\n")
+        view.configure(state="disabled")
+        self.status.set(f"Đã tìm thấy {len(groups)} nhóm file trùng. Không xóa dữ liệu.")
+
+    def preview_image(self) -> None:
+        selected = self.selected_items()
+        if len(selected) != 1 or selected[0].is_dir:
+            messagebox.showinfo("Xem ảnh", "Chọn một file ảnh.")
+            return
+        path = selected[0].path
+        if Path(path).suffix.lower() not in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"):
+            messagebox.showinfo("Xem ảnh", "File đã chọn không phải ảnh được hỗ trợ.")
+            return
+        win = Toplevel(self)
+        win.title("Xem trước – " + Path(path).name)
+        win.geometry("780x590")
+        label = Label(win, text="Đang tải ảnh...")
+        label.pack(fill="both", expand=True, padx=10, pady=10)
+        try:
+            from PIL import Image, ImageTk
+            with Image.open(path) as img:
+                img.thumbnail((740, 520))
+                photo = ImageTk.PhotoImage(img.copy(), master=win)
+        except ImportError:
+            try:
+                photo = PhotoImage(file=path, master=win)
+                factor = max(1, (max(photo.width(), photo.height()) + 739) // 740)
+                photo = photo.subsample(factor)
+            except (TclError, OSError) as exc:
+                label.configure(text="Cần Pillow để xem JPG/BMP/WebP.\\n" + str(exc))
+                return
+        except (OSError, ValueError) as exc:
+            label.configure(text="Không đọc được ảnh: " + str(exc))
+            return
+        label.configure(image=photo, text="")
+        label.image = photo
+
+    def authorize_edit(self, paths: list[str]) -> bool:
+        if not any(protected_path(path, self.protected_files) for path in paths):
+            return True
+        if not isinstance(self.edit_password, dict):
+            messagebox.showerror("Bảo vệ", "Thiếu cấu hình mật khẩu. Không thể chỉnh sửa mục bảo vệ.")
+            return False
+        password = simpledialog.askstring("Xác thực chỉnh sửa", "Nhập mật khẩu để sửa mục được bảo vệ:",
+                                          show="*", parent=self)
+        if password is None:
+            return False
+        if not verify_password(password, self.edit_password):
+            messagebox.showerror("Sai mật khẩu", "Không được phép chỉnh sửa.")
+            return False
+        return True
+
+    def manage_protection(self) -> None:
+        selected = self.selected_items()
+        if len(selected) != 1:
+            messagebox.showinfo("Bảo vệ file", "Chọn một file hoặc thư mục.")
+            return
+        path = selected[0].path
+        if self.edit_password is None:
+            password = simpledialog.askstring("Tạo mật khẩu chỉnh sửa",
+                "Đặt mật khẩu tối thiểu 8 ký tự (không thể khôi phục nếu quên):",
+                show="*", parent=self)
+            if password is None:
+                return
+            confirm = simpledialog.askstring("Xác nhận mật khẩu", "Nhập lại mật khẩu:", show="*", parent=self)
+            if password != confirm:
+                messagebox.showerror("Mật khẩu", "Hai mật khẩu không trùng nhau.")
+                return
+            try:
+                self.edit_password = hash_password(password)
+            except ValueError as exc:
+                messagebox.showerror("Mật khẩu", str(exc))
+                return
+        else:
+            password = simpledialog.askstring("Xác thực", "Nhập mật khẩu quản lý bảo vệ:", show="*", parent=self)
+            if password is None or not verify_password(password, self.edit_password):
+                messagebox.showerror("Mật khẩu", "Không đúng mật khẩu.")
+                return
+        if path in self.protected_files:
+            self.protected_files.remove(path)
+            self.status.set(f"Đã bỏ khóa chỉnh sửa: {path}")
+        else:
+            self.protected_files.append(path)
+            self.status.set(f"Đã khóa chỉnh sửa trong FileHub: {path}")
+        self.save_settings()
+        self.refresh()
+
     def on_new_folder(self, event=None) -> None:
         if self.running_op:
             return
@@ -749,6 +1023,8 @@ class FileHub(Tk):
             messagebox.showerror("Tên không hợp lệ", "Tên không được rỗng, có dấu / hoặc \\ và các ký tự Windows bị cấm.")
             return
         path = Path(self.current_path) / name
+        if not self.authorize_edit([self.current_path]):
+            return
         try:
             path.mkdir()
             self.refresh()
@@ -772,11 +1048,15 @@ class FileHub(Tk):
             messagebox.showerror("Tên không hợp lệ", "Vui lòng nhập tên hợp lệ, không chứa ký tự cấm.")
             return "break"
         target = Path(item.parent) / name
+        if not self.authorize_edit([item.path]):
+            return "break"
         if target.exists():
             messagebox.showerror("Đã tồn tại", "Đã có tệp/thư mục trùng tên. Không ghi đè.")
             return "break"
         try:
             Path(item.path).rename(target)
+            self.protected_files = update_paths(self.protected_files, item.path, str(target))
+            self.save_settings()
             self.refresh()
         except OSError as exc:
             messagebox.showerror("Không thể đổi tên", str(exc))
@@ -805,7 +1085,7 @@ class FileHub(Tk):
             self.status.set(f"Đã chọn di chuyển {len(self.clipboard_paths)} mục. Chuyển tới thư mục đích và bấm Dán.")
         return "break"
 
-    def on_paste(self, event=None) -> None:
+    def on_paste(self, event=None, destination=None) -> None:
         if event is not None and self._focus_is_text_input():
             return None
         if self.running_op:
@@ -814,7 +1094,10 @@ class FileHub(Tk):
         if not sources:
             self.status.set("Chưa có file nào trong bộ nhớ sao chép của ứng dụng.")
             return "break"
-        dest_dir = self.current_path
+        dest_dir = destination or self.current_path
+        if not os.path.isdir(dest_dir):
+            messagebox.showerror("Không thể dán", "Thư mục đích không tồn tại.")
+            return "break"
         valid = []
         rejected = []
         for source in sources:
@@ -828,6 +1111,12 @@ class FileHub(Tk):
                 valid.append(source)
         if rejected and not valid:
             messagebox.showwarning("Không thể dán", "\n".join(rejected[:5]))
+            return "break"
+        if self.clipboard_mode == "move" and not self.authorize_edit(valid):
+            return "break"
+        if not self.authorize_edit([dest_dir]):
+            return "break"
+        if not valid:
             return "break"
         self._perform_background_operation(valid, dest_dir, self.clipboard_mode == "move", rejected)
         return "break"
@@ -845,6 +1134,7 @@ class FileHub(Tk):
                     dest = collision_free_path(Path(dest_dir) / src.name)
                     if move:
                         shutil.move(str(src), str(dest))
+                        self.events.put(("path_moved", str(src), str(dest)))
                     elif src.is_dir():
                         shutil.copytree(src, dest, symlinks=True)
                     else:
@@ -864,6 +1154,8 @@ class FileHub(Tk):
             return "break"
         selected = collapse_nested([x.path for x in self.selected_items()])
         if not selected:
+            return "break"
+        if not self.authorize_edit(selected):
             return "break"
         if send2trash is None:
             messagebox.showerror("Thiếu chức năng Thùng rác", "Cần cài thư viện send2trash.\nChương trình không xóa vĩnh viễn để tránh mất dữ liệu.")
@@ -894,17 +1186,24 @@ class FileHub(Tk):
 
     def on_add_favorite(self) -> None:
         selected = self.selected_items()
-        path = selected[0].path if len(selected) == 1 and selected[0].is_dir else self.current_path
-        if path not in self.favorites:
-            self.favorites.append(path)
-            self.save_settings()
-            self._sidebar_rebuild()
-            self.status.set(f"Đã thêm yêu thích: {path}")
+        if not selected:
+            path = self.current_path
+            favorites = self.favorites
+        elif len(selected) == 1:
+            path = selected[0].path
+            favorites = self.favorites if selected[0].is_dir else self.favorite_files
         else:
-            if messagebox.askyesno("Đã trong yêu thích", "Thư mục đã được yêu thích. Bỏ khỏi danh sách?"):
-                self.favorites.remove(path)
-                self.save_settings()
-                self._sidebar_rebuild()
+            self.status.set("Chọn một file hoặc thư mục để thêm vào yêu thích.")
+            return
+        if path in favorites:
+            favorites.remove(path)
+            self.status.set(f"Đã bỏ yêu thích: {path}")
+        else:
+            favorites.append(path)
+            self.status.set(f"Đã thêm yêu thích: {path}")
+        self.save_settings()
+        self._sidebar_rebuild()
+        self.refresh()
 
     def properties(self) -> None:
         selected = self.selected_items()
