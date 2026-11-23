@@ -779,8 +779,13 @@ class FileHub(Tk):
 
     def _context_menu(self, event) -> None:
         row = self.table.identify_row(event.y)
-        if row and row not in self.table.selection():
-            self.table.selection_set(row)
+        if row:
+            # Right-click acts on the item under the pointer, not a stale selection.
+            if row not in self.table.selection():
+                self.table.selection_set(row)
+            self.table.focus(row)
+        else:
+            self.table.selection_remove(*self.table.selection())
         p = self.palette()
         menu = Menu(self, tearoff=False, bg=p["panel"], fg=p["text"], activebackground=p["soft"], activeforeground=p["text"])
         menu.add_command(label="Mở", command=self.open_selection)
@@ -789,9 +794,14 @@ class FileHub(Tk):
         menu.add_command(label="Đổi tên hàng loạt", command=self.on_batch_rename)
         menu.add_command(label="Bảo vệ / bỏ bảo vệ", command=self.manage_protection)
         menu.add_separator()
-        menu.add_command(label="Sao chép", command=self.on_copy)
-        menu.add_command(label="Cắt", command=self.on_cut)
-        menu.add_command(label="Dán vào thư mục đang xem", command=self.on_paste)
+        menu.add_command(label="Cắt file đã chọn", command=self.on_cut, state="normal" if row else "disabled")
+        menu.add_command(label="Sao chép file đã chọn", command=self.on_copy, state="normal" if row else "disabled")
+        target = self.items.get(row) if row else None
+        if target and target.is_dir:
+            menu.add_command(label="Dán vào thư mục này", command=lambda dest=target.path: self.on_paste(destination=dest),
+                             state="normal" if self.clipboard_paths else "disabled")
+        menu.add_command(label="Dán vào thư mục đang xem", command=self.on_paste,
+                         state="normal" if self.clipboard_paths else "disabled")
         menu.add_command(label="Sao chép đường dẫn", command=self.copy_paths_to_os)
         menu.add_separator()
         menu.add_command(label="Đổi tên (F2)", command=self.on_rename)
@@ -1075,7 +1085,7 @@ class FileHub(Tk):
             self.status.set(f"Đã chọn di chuyển {len(self.clipboard_paths)} mục. Chuyển tới thư mục đích và bấm Dán.")
         return "break"
 
-    def on_paste(self, event=None) -> None:
+    def on_paste(self, event=None, destination=None) -> None:
         if event is not None and self._focus_is_text_input():
             return None
         if self.running_op:
@@ -1084,7 +1094,10 @@ class FileHub(Tk):
         if not sources:
             self.status.set("Chưa có file nào trong bộ nhớ sao chép của ứng dụng.")
             return "break"
-        dest_dir = self.current_path
+        dest_dir = destination or self.current_path
+        if not os.path.isdir(dest_dir):
+            messagebox.showerror("Không thể dán", "Thư mục đích không tồn tại.")
+            return "break"
         valid = []
         rejected = []
         for source in sources:
@@ -1102,6 +1115,8 @@ class FileHub(Tk):
         if self.clipboard_mode == "move" and not self.authorize_edit(valid):
             return "break"
         if not self.authorize_edit([dest_dir]):
+            return "break"
+        if not valid:
             return "break"
         self._perform_background_operation(valid, dest_dir, self.clipboard_mode == "move", rejected)
         return "break"
