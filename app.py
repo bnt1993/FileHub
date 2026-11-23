@@ -781,8 +781,8 @@ class FileHub(Tk):
         row = self.table.identify_row(event.y)
         if row:
             # Right-click acts on the item under the pointer, not a stale selection.
-            if row not in self.table.selection():
-                self.table.selection_set(row)
+            # Context actions operate on exactly the file under the mouse.
+            self.table.selection_set(row)
             self.table.focus(row)
         else:
             self.table.selection_remove(*self.table.selection())
@@ -794,13 +794,13 @@ class FileHub(Tk):
         menu.add_command(label="Đổi tên hàng loạt", command=self.on_batch_rename)
         menu.add_command(label="Bảo vệ / bỏ bảo vệ", command=self.manage_protection)
         menu.add_separator()
-        menu.add_command(label="Cắt file đã chọn", command=self.on_cut, state="normal" if row else "disabled")
-        menu.add_command(label="Sao chép file đã chọn", command=self.on_copy, state="normal" if row else "disabled")
+        menu.add_command(label="Cắt file đã chọn", command=lambda iid=row: self._context_clipboard(iid, "move"), state="normal" if row else "disabled")
+        menu.add_command(label="Sao chép file đã chọn", command=lambda iid=row: self._context_clipboard(iid, "copy"), state="normal" if row else "disabled")
         target = self.items.get(row) if row else None
         if target and target.is_dir:
             menu.add_command(label="Dán vào thư mục này", command=lambda dest=target.path: self.on_paste(destination=dest),
                              state="normal" if self.clipboard_paths else "disabled")
-        menu.add_command(label="Dán vào thư mục đang xem", command=self.on_paste,
+        menu.add_command(label="Dán vào thư mục đang xem", command=lambda: self.on_paste(destination=self.current_path),
                          state="normal" if self.clipboard_paths else "disabled")
         menu.add_command(label="Sao chép đường dẫn", command=self.copy_paths_to_os)
         menu.add_separator()
@@ -1065,6 +1065,18 @@ class FileHub(Tk):
     def _focus_is_text_input(self) -> bool:
         return self.focus_get() in (self.address_entry, self.search_entry)
 
+    def _context_clipboard(self, iid: str, mode: str) -> None:
+        """Use the clicked row explicitly; don't depend on focus/selection events."""
+        item = self.items.get(iid)
+        if item is None:
+            messagebox.showwarning("Không tìm thấy", "File không còn trong danh sách. Hãy làm mới.")
+            return
+        self.clipboard_paths = [item.path]
+        self.clipboard_mode = mode
+        verb = "Cắt" if mode == "move" else "Sao chép"
+        self.status.set(f"Đã {verb.lower()} {item.name}. Chọn thư mục đích rồi nhấn chuột phải → Dán.")
+        messagebox.showinfo(f"Đã {verb.lower()} file", f"{item.name}\\n\\nChọn thư mục đích và nhấn Dán.\\nBộ nhớ sao chép chỉ hoạt động trong FileHub.")
+
     def on_copy(self, event=None) -> None:
         if event is not None and self._focus_is_text_input():
             return None
@@ -1118,6 +1130,7 @@ class FileHub(Tk):
             return "break"
         if not valid:
             return "break"
+        self.status.set(f"Đang {'di chuyển' if self.clipboard_mode == 'move' else 'sao chép'} {len(valid)} mục vào {dest_dir}")
         self._perform_background_operation(valid, dest_dir, self.clipboard_mode == "move", rejected)
         return "break"
 
