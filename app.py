@@ -341,7 +341,7 @@ class FileHub(Tk):
         extra = Frame(self.center, bg=p["panel"])
         extra.pack(fill="x", padx=13, pady=(0, 8))
         for name, command in (("Đổi tên hàng loạt", self.on_batch_rename), ("Xuất Excel/CSV", self.on_export),
-                              ("Tìm file trùng", self.on_duplicates), ("Xem ảnh", self.preview_image),
+                              ("Tìm file trùng", self.on_duplicates), ("Dừng quét", self.cancel_duplicates), ("Xem ảnh", self.preview_image),
                               ("Mở thư mục chứa", self.open_containing_folder)):
             self._button(extra, name, command).pack(side="left", padx=(0, 5))
         search_options = Frame(self.center, bg=p["panel"])
@@ -579,7 +579,8 @@ class FileHub(Tk):
         cutoff = {"Hôm nay": 1, "7 ngày": 7, "30 ngày": 30, "365 ngày": 365}.get(time_filter)
         if cutoff is not None:
             import time
-            cutoff = time.time() - cutoff * 86400
+            cutoff = (datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                      if time_filter == "Hôm nay" else time.time() - cutoff * 86400)
         extensions = {"PDF": (".pdf",), "Excel": (".xls", ".xlsx", ".xlsm", ".csv"),
                       "Word": (".doc", ".docx", ".rtf"), "Ảnh": (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"),
                       "HTML": (".html", ".htm"), "Python": (".py",), "ZIP": (".zip", ".7z", ".rar")}
@@ -671,7 +672,10 @@ class FileHub(Tk):
                     self.running_op = False
                     self.progress.stop()
                     self.progress.pack_forget()
-                    self._show_duplicates(groups, count, capped)
+                    if self.duplicate_stop.is_set():
+                        self.status.set("Đã hủy quét file trùng.")
+                    else:
+                        self._show_duplicates(groups, count, capped)
                 elif kind == "op_progress":
                     _, done, total, moving = event
                     self.status.set(f"Đang {'di chuyển' if moving else 'sao chép'}: {done}/{total} mục")
@@ -827,8 +831,10 @@ class FileHub(Tk):
             plans = rename_plan(paths, prefix, suffix, 1 if numbering else 0)
             if not plans:
                 return
-            preview = "\\n".join(f"{Path(a).name} → {Path(b).name}" for a, b in plans[:8])
-            if not messagebox.askyesno("Xác nhận đổi tên", f"Đổi tên {len(plans)} mục?\\n\\n{preview}"):
+            if any(not valid_new_name(Path(dest).name) for _, dest in plans):
+                raise ValueError("Tên file không hợp lệ trên Windows.")
+            preview = "\n".join(f"{Path(a).name} → {Path(b).name}" for a, b in plans[:8])
+            if not messagebox.askyesno("Xác nhận đổi tên", f"Đổi tên {len(plans)} mục?\n\n{preview}"):
                 return
             apply_renames(plans)
             for old, new in plans:
@@ -861,6 +867,11 @@ class FileHub(Tk):
             self.status.set(f"Đã xuất {len(records)} mục: {target}")
         except OSError as exc:
             messagebox.showerror("Xuất thất bại", str(exc))
+
+    def cancel_duplicates(self) -> None:
+        if self.running_op and not self.duplicate_stop.is_set():
+            self.duplicate_stop.set()
+            self.status.set("Đang dừng quét file trùng...")
 
     def on_duplicates(self) -> None:
         if self.running_op:
