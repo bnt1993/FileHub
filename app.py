@@ -228,6 +228,9 @@ class FileHub(Tk):
         self.bind("<Control-c>", self.on_copy)
         self.bind("<Control-x>", self.on_cut)
         self.bind("<Control-v>", self.on_paste)
+        self.bind("<Control-C>", self.on_copy)
+        self.bind("<Control-X>", self.on_cut)
+        self.bind("<Control-V>", self.on_paste)
         self.bind("<Control-a>", self.select_all)
         self.bind("<F2>", self.on_rename)
         self.bind("<F5>", lambda e: self.refresh())
@@ -794,19 +797,19 @@ class FileHub(Tk):
         menu.add_command(label="Đổi tên hàng loạt", command=self.on_batch_rename)
         menu.add_command(label="Bảo vệ / bỏ bảo vệ", command=self.manage_protection)
         menu.add_separator()
-        menu.add_command(label="Cắt file đã chọn", command=lambda iid=row: self._context_clipboard(iid, "move"), state="normal" if row else "disabled")
-        menu.add_command(label="Sao chép file đã chọn", command=lambda iid=row: self._context_clipboard(iid, "copy"), state="normal" if row else "disabled")
+        menu.add_command(label="Cắt file đã chọn    Ctrl+X", command=lambda iid=row: self._context_clipboard(iid, "move"), state="normal" if row else "disabled")
+        menu.add_command(label="Sao chép file đã chọn    Ctrl+C", command=lambda iid=row: self._context_clipboard(iid, "copy"), state="normal" if row else "disabled")
         target = self.items.get(row) if row else None
         if target and target.is_dir:
-            menu.add_command(label="Dán vào thư mục này", command=lambda dest=target.path: self.on_paste(destination=dest),
+            menu.add_command(label="Dán vào thư mục này    Ctrl+V", command=lambda dest=target.path: self.on_paste(destination=dest),
                              state="normal" if self.clipboard_paths else "disabled")
-        menu.add_command(label="Dán vào thư mục đang xem", command=lambda: self.on_paste(destination=self.current_path),
+        menu.add_command(label="Dán vào thư mục đang xem    Ctrl+V", command=lambda: self.on_paste(destination=self.current_path),
                          state="normal" if self.clipboard_paths else "disabled")
         menu.add_command(label="Sao chép đường dẫn", command=self.copy_paths_to_os)
         menu.add_separator()
-        menu.add_command(label="Đổi tên (F2)", command=self.on_rename)
+        menu.add_command(label="Đổi tên    F2", command=self.on_rename)
         menu.add_command(label="Thêm / bỏ yêu thích", command=self.on_add_favorite)
-        menu.add_command(label="Xóa vào Thùng rác (Del)", command=self.on_delete)
+        menu.add_command(label="Xóa vào Thùng rác    Del", command=self.on_delete)
         menu.add_command(label="Thông tin", command=self.properties)
         try:
             menu.tk_popup(event.x_root, event.y_root)
@@ -1074,8 +1077,8 @@ class FileHub(Tk):
         self.clipboard_paths = [item.path]
         self.clipboard_mode = mode
         verb = "Cắt" if mode == "move" else "Sao chép"
-        self.status.set(f"Đã {verb.lower()} {item.name}. Chọn thư mục đích rồi nhấn chuột phải → Dán.")
-        messagebox.showinfo(f"Đã {verb.lower()} file", f"{item.name}\\n\\nChọn thư mục đích và nhấn Dán.\\nBộ nhớ sao chép chỉ hoạt động trong FileHub.")
+        self.status.set(f"Đã {verb.lower()} {item.name}. Mở thư mục đích rồi nhấn Ctrl+V hoặc chuột phải → Dán.")
+        # Avoid modal dialogs for everyday keyboard and context-menu operations.
 
     def on_copy(self, event=None) -> None:
         if event is not None and self._focus_is_text_input():
@@ -1106,6 +1109,8 @@ class FileHub(Tk):
         if not sources:
             self.status.set("Chưa có file nào trong bộ nhớ sao chép của ứng dụng.")
             return "break"
+        # Windows-style: Ctrl+V pastes into the folder currently open.
+        # Context-menu paste on a folder uses its explicit destination.
         dest_dir = destination or self.current_path
         if not os.path.isdir(dest_dir):
             messagebox.showerror("Không thể dán", "Thư mục đích không tồn tại.")
