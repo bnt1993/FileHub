@@ -37,8 +37,8 @@ jobs:
 
       - name: Check syntax and tests
         run: |
-          python -m compileall -q app.py filehub_tools.py
-          python -m unittest -v test_filehub_tools.py
+          python -m compileall -q app.py filehub_tools.py filehub_security.py
+          python -m unittest -v test_filehub_tools.py test_filehub_security.py
 
       - name: Build EXE
 
