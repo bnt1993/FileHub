@@ -100,3 +100,12 @@ python app.py
 - Đổi tên hàng loạt không di chuyển nội dung file; vẫn nên thử với file mẫu trước khi sử dụng dữ liệu quan trọng.
 - File yêu thích lưu đường dẫn, không tự tìm lại nếu file được chuyển/đổi tên bên ngoài ứng dụng.
 - GitHub Actions chạy kiểm tra cú pháp và các bài test trước khi đóng gói EXE.
+
+
+## Bảo vệ chỉnh sửa bằng mật khẩu (trong FileHub)
+
+Chọn một file/thư mục → **Bảo vệ file** hoặc chuột phải → **Bảo vệ / bỏ bảo vệ**. Lần đầu tạo mật khẩu tối thiểu 8 ký tự. Các lần tiếp theo cần mật khẩu để bật/tắt bảo vệ. File/thư mục được khóa có biểu tượng 🔒. Khóa thư mục áp dụng cho các file con.
+
+FileHub yêu cầu mật khẩu trước khi đổi tên, đổi tên hàng loạt, di chuyển, xóa, tạo thư mục con hoặc dán vào thư mục được bảo vệ. Mật khẩu chỉ lưu dạng băm PBKDF2-HMAC-SHA256 có muối ngẫu nhiên trong cấu hình người dùng.
+
+**Giới hạn bảo mật quan trọng:** Đây là khóa thao tác ở cấp ứng dụng, **không phải quyền NTFS, không mã hóa file và không ngăn chỉnh sửa từ Windows Explorer, Word hoặc ứng dụng khác**. Người có quyền truy cập tài khoản Windows và file cấu hình có thể can thiệp vào cài đặt khóa. Không dùng thay thế BitLocker/EFS hoặc quyền truy cập Windows do quản trị viên cấu hình. Nếu quên mật khẩu, ứng dụng không cung cấp tính năng khôi phục.
