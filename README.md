@@ -109,3 +109,13 @@ Chọn một file/thư mục → **Bảo vệ file** hoặc chuột phải → *
 FileHub yêu cầu mật khẩu trước khi đổi tên, đổi tên hàng loạt, di chuyển, xóa, tạo thư mục con hoặc dán vào thư mục được bảo vệ. Mật khẩu chỉ lưu dạng băm PBKDF2-HMAC-SHA256 có muối ngẫu nhiên trong cấu hình người dùng.
 
 **Giới hạn bảo mật quan trọng:** Đây là khóa thao tác ở cấp ứng dụng, **không phải quyền NTFS, không mã hóa file và không ngăn chỉnh sửa từ Windows Explorer, Word hoặc ứng dụng khác**. Người có quyền truy cập tài khoản Windows và file cấu hình có thể can thiệp vào cài đặt khóa. Không dùng thay thế BitLocker/EFS hoặc quyền truy cập Windows do quản trị viên cấu hình. Nếu quên mật khẩu, ứng dụng không cung cấp tính năng khôi phục.
+
+
+## Chuột phải: Cắt / Sao chép / Dán
+
+- Chuột phải vào file → **Cắt file đã chọn** hoặc **Sao chép file đã chọn**.
+- Chuột phải vào một thư mục → **Dán vào thư mục này** để đưa file đã cắt/sao chép vào đó mà không cần mở thư mục.
+- Chuột phải vào vùng trống → **Dán vào thư mục đang xem**.
+- Vẫn hỗ trợ Ctrl+X, Ctrl+C, Ctrl+V. File trùng tên được tự đổi tên đích để tránh ghi đè.
+- Các thao tác này sử dụng bộ nhớ sao chép **nội bộ FileHub**, không đồng bộ với clipboard file của Windows Explorer.
+- Khi dán/di chuyển vào hoặc ra vùng được bảo vệ, FileHub yêu cầu mật khẩu theo quy tắc bảo vệ hiện có.
